@@ -1494,7 +1494,7 @@ class StaticTritonCompileResult(CompileResult[StaticallyLaunchedCudaKernel]):
                 # Requires storing the entire binary
                 raise CannotStaticallyLaunchKernel("store_cubin is enabled")
 
-            if kernel.metadata.launch_pdl or kernel.metadata.launch_cooperative_grid:
+            if kernel.metadata.launch_cooperative_grid:
                 raise CannotStaticallyLaunchKernel(
                     "static launch does not support launch attributes"
                 )
