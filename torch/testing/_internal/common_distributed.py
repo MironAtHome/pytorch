@@ -124,6 +124,15 @@ def exit_if_lt_x_cuda_devs(x):
         sys.exit(TEST_SKIPS[f"multi-gpu-{x}"].exit_code)
 
 
+# allows you to check for multiple accelerator irrespective of device type
+# to add new device types to this check simply follow the same format
+# and append an elif with the conditional and appropriate device count function for your new device
+def exit_if_lt_x_accelerators(x):
+    if torch.accelerator.is_available():
+        if torch.accelerator.device_count() < x:
+            sys.exit(TEST_SKIPS[f"multi-accelerator-{x}"].exit_code)
+
+
 def skip_if_no_gpu(func):
     """Skips if the world size exceeds the number of GPUs, ensuring that if the
     test is run, each rank has its own GPU via ``torch.cuda.device(rank)``."""
