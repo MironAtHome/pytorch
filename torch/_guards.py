@@ -41,6 +41,7 @@ if TYPE_CHECKING:
 
     import sympy
 
+    from torch._dynamo.backends.distributed import DDPOptimizerContext
     from torch._dynamo.codegen import PyCodegen
     from torch._functorch._aot_autograd.schemas import ViewAndMutationMeta
     from torch._subclasses.fake_tensor import FakeTensorMode
@@ -159,6 +160,17 @@ class GuardSource(enum.Enum):
         return self in (GuardSource.GLOBAL_FSDP_MODULE, GuardSource.LOCAL_FSDP_MODULE)
 
     def is_specialized_nn_module(self) -> bool:
+        import torch._dynamo.config as config
+
+        if config._unsafe_skip_fsdp_module_guards:
+            return (
+                self
+                in (
+                    GuardSource.GLOBAL_SPECIALIZED_NN_MODULE,
+                    GuardSource.LOCAL_SPECIALIZED_NN_MODULE,
+                )
+                or self.is_fsdp_module()
+            )
         return self in (
             GuardSource.GLOBAL_SPECIALIZED_NN_MODULE,
             GuardSource.LOCAL_SPECIALIZED_NN_MODULE,
@@ -250,17 +262,18 @@ class Guard:
     # it is meaningless.  Example create_fns that are like this include
     # GRAD_MODE and SHAPE_ENV.
     originating_source: Source
-    create_fn: Callable[[GuardBuilderBase, Guard], Any]
+    create_fn: Callable[[GuardBuilderBase, Guard], None]
 
     # Export only. These values are written to at time of guard check_fn creation.
     guard_types: Optional[list[str]] = None
     code_list: Optional[list[str]] = None
     obj_weakref: Optional[object] = None
-    guarded_class_weakref: Optional[type] = None
+    guarded_class_weakref: Optional[weakref.ReferenceType[Any]] = None
 
     stack: Optional[CapturedTraceback] = None
     user_stack: Optional[traceback.StackSummary] = None
     _hash: Optional[int] = None
+    _unserializable: bool = False
 
     def __hash__(self) -> int:
         if self._hash is None:
@@ -366,10 +379,17 @@ class Guard:
     def is_local(self) -> bool:
         return self.source.is_local()
 
+    def create_fn_name(self) -> str:
+        if isinstance(self.create_fn, functools.partial):
+            create_fn = self.create_fn.func  # type: ignore[attr-defined]
+        else:
+            create_fn = self.create_fn
+        return create_fn.__name__
+
     def set_export_info(
         self,
         guard_type: str,
-        guarded_class: Optional[type],
+        guarded_class: Optional[weakref.ReferenceType[Any]],
         code_list: list[str],
         obj_weakref: object,
     ) -> None:
@@ -622,8 +642,8 @@ class GuardsSet:
         if collect_debug_stack:
             if guard.stack is None:
                 guard.stack = CapturedTraceback.extract(skip=1 + skip)
-            if guard.user_stack is None:
-                guard.user_stack = TracingContext.extract_stack()
+        if guard.user_stack is None:
+            guard.user_stack = TracingContext.extract_stack()
         self.inner.add(guard)
 
     def update(self, *others: set[Guard]) -> None:
@@ -849,6 +869,8 @@ class TracingContext:
         self.loc_in_frame: Optional[tuple[str, int, str]] = None
         # this is only set after aot_autograd
         self.fw_metadata: Optional[ViewAndMutationMeta] = None
+        # this is only set when the DDPOptimizer is used
+        self.ddp_optimizer_ctx: Optional[DDPOptimizerContext] = None
         # this is only set after aot_autograd
         self.aot_graph_name: Optional[list[str]] = None
         self.params_flat: Optional[list[Any]] = None
