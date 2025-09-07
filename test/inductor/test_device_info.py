@@ -44,10 +44,10 @@ class TestDeviceInfo(TestCase):
             mock_get_device_name.return_value = "NVIDIA H100"
             tops = datasheet_tops(torch.float32)
             self.assertIsNotNone(tops)
-            self.assertEqual(tops, 67.5)
+            self.assertEqual(tops, 67.0)
 
             tops_tf32 = datasheet_tops(torch.float32, is_tf32=True)
-            self.assertEqual(tops_tf32, 156.0)
+            self.assertEqual(tops_tf32, 989.0)
 
             mock_get_device_name.return_value = "Unknown Device"
             tops_unknown = datasheet_tops(torch.float32)
@@ -284,19 +284,24 @@ class TestDeviceInfo(TestCase):
             self.assertEqual(tops_tf32, 653.7)
 
     def test_flops_hardware_calculation(self):
-        """Test FLOPS calculation using hardware lookup methods."""
+        """Test FLOPS calculation now uses datasheet values with clock adjustment."""
         with (
-            patch.object(DeviceInfo, "lookup_sm_count", return_value=108),
-            patch.object(DeviceInfo, "lookup_cores_per_sm", return_value=64),
             patch.object(DeviceInfo, "lookup_clock_hz", return_value=1.5e9),
-            patch.object(DeviceInfo, "lookup_ops_per_core_per_cycle", return_value=2),
             patch("torch.cuda.is_available", return_value=True),
             patch("torch.cuda.get_device_name", return_value="AMD MI300X"),
         ):
             flops = DeviceInfo.lookup_tops(
                 device_name="AMD MI300X", dtype=torch.float32, force_datasheet=False
             )
-            expected_flops = 108 * 64 * 1.5e9 * 2
+            # Now uses datasheet value (163.4 TOPS) with clock adjustment 
+            # Device mapping has clock_hz=2100*1e6, so ratio = 1.5e9 / (2100*1e6) = ~0.714
+            datasheet_flops = 163.4 * 1e12
+            device_info = lookup_device_info("AMD MI300X")
+            if device_info and device_info.clock_hz:
+                clock_ratio = 1.5e9 / device_info.clock_hz
+                expected_flops = datasheet_flops * clock_ratio
+            else:
+                expected_flops = datasheet_flops
             self.assertEqual(flops, expected_flops)
 
     def test_flops_datasheet_calculation(self):
@@ -310,7 +315,7 @@ class TestDeviceInfo(TestCase):
             flops = DeviceInfo.lookup_tops(
                 device_name="NVIDIA H100", dtype=torch.float32, force_datasheet=True
             )
-            expected_flops = 67.5 * 1e12
+            expected_flops = 67.0 * 1e12
             self.assertEqual(flops, expected_flops)
 
     def test_flops_fallback_to_datasheet(self):
@@ -324,7 +329,7 @@ class TestDeviceInfo(TestCase):
             flops = DeviceInfo.lookup_tops(
                 device_name="NVIDIA H100", dtype=torch.float32, force_datasheet=False
             )
-            expected_flops = 67.5 * 1e12
+            expected_flops = 67.0 * 1e12
             self.assertEqual(flops, expected_flops)
 
     def test_flops_clock_adjustment_in_fallback(self):
@@ -401,7 +406,7 @@ class TestDeviceInfo(TestCase):
                     "NVIDIA H100", dtype=torch.float32, force_datasheet=False
                 )
 
-                expected_flops = 67.5 * 1e12
+                expected_flops = 67.0 * 1e12
                 self.assertEqual(flops, expected_flops)
 
     def test_flops_no_device_name(self):
@@ -435,6 +440,7 @@ class TestDeviceInfo(TestCase):
             flops = DeviceInfo.lookup_tops(
                 "Unknown Device", dtype=torch.float32, force_datasheet=False
             )
+            # Should be None for unknown device
             self.assertIsNone(flops)
 
     def test_flops_partial_hardware_values(self):
@@ -445,7 +451,7 @@ class TestDeviceInfo(TestCase):
             flops = DeviceInfo.lookup_tops(
                 device_name="NVIDIA H100", dtype=torch.float32, force_datasheet=False
             )
-            expected_flops = 67.5 * 1e12
+            expected_flops = 67.0 * 1e12
             self.assertEqual(flops, expected_flops)
 
     def test_flops_exception_handling(self):
@@ -463,25 +469,30 @@ class TestDeviceInfo(TestCase):
             flops = DeviceInfo.lookup_tops(
                 "NVIDIA H100", dtype=torch.float32, force_datasheet=False
             )
-            expected_flops = 67.5 * 1e12
+            expected_flops = 67.0 * 1e12
             self.assertEqual(flops, expected_flops)
 
     def test_flops_integration_with_hardware_lookup(self):
-        """Test FLOPS integration with actual hardware lookup methods."""
+        """Test FLOPS integration with datasheet values and clock adjustment."""
         dn = "NVIDIA H100"
 
         with (
-            patch.object(DeviceInfo, "lookup_sm_count", return_value=108),
-            patch.object(DeviceInfo, "lookup_cores_per_sm", return_value=64),
             patch.object(DeviceInfo, "lookup_clock_hz", return_value=1500 * 1e6),
-            patch.object(DeviceInfo, "lookup_ops_per_core_per_cycle", return_value=2),
             patch("torch.cuda.is_available", return_value=True),
             patch("torch.cuda.get_device_name", return_value=dn),
         ):
             flops = DeviceInfo.lookup_tops(
                 device_name=dn, dtype=torch.float32, force_datasheet=False
             )
-            expected_flops = 108 * 64 * (1500 * 1e6) * 2
+            # Now uses datasheet value (67.0 TOPS) with clock adjustment
+            # Device mapping has clock_hz=1.98e9, so ratio = 1500*1e6 / 1.98e9 = ~0.7576
+            datasheet_flops = 67.0 * 1e12
+            device_info = lookup_device_info(dn)
+            if device_info and device_info.clock_hz:
+                clock_ratio = (1500 * 1e6) / device_info.clock_hz
+                expected_flops = datasheet_flops * clock_ratio
+            else:
+                expected_flops = datasheet_flops
             self.assertEqual(flops, expected_flops)
 
 

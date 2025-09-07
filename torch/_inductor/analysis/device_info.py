@@ -395,7 +395,9 @@ class DeviceInfo:
         return result if isinstance(result, (int, float)) or result is None else None
 
     @staticmethod
-    def lookup_ops_per_core_per_cycle(device_name: str, dtype: torch.dtype) -> Optional[int]:
+    def lookup_ops_per_core_per_cycle(
+        device_name: str, dtype: torch.dtype
+    ) -> Optional[int]:
         """Get the operations per core per cycle for the current device."""
         # Attempt to lookup from device mapping
         device_info = lookup_device_info(device_name)
@@ -462,30 +464,11 @@ class DeviceInfo:
         Returns:
             Peak FLOPS as a float, or None if calculation fails
         """
-        peak_ops = None
         lookupable = torch.cuda.is_available() and (
             torch.cuda.get_device_name() == device_name
         )
 
-        if not force_datasheet and lookupable:
-            # We're on the device that we're testing, so try to look up values via hardware libraries.
-            try:
-                sm_count = DeviceInfo.lookup_sm_count(device_name)
-                cores_per_sm = DeviceInfo.lookup_cores_per_sm(device_name)
-                clock_hz = DeviceInfo.lookup_clock_hz(device_name)
-                ops_per_core_per_cycle = DeviceInfo.lookup_ops_per_core_per_cycle(
-                    device_name, dtype
-                )
-
-                if all(
-                    x is not None
-                    for x in [sm_count, cores_per_sm, clock_hz, ops_per_core_per_cycle]
-                ):
-                    return sm_count * cores_per_sm * clock_hz * ops_per_core_per_cycle # type: ignore[operator]
-            except Exception:
-                pass
-
-        # Fallback to datasheet if hardware calculation failed
+        # Use datasheet values adjusted by clock ratio
         peak_ops = datasheet_tops(dtype, is_tf32)
         if peak_ops is None:
             return None
@@ -654,9 +637,7 @@ _device_mapping: dict[str, DeviceSpec] = {
         # bus: 8192 bit
         clock_hz=2100 * 1e6,
         memory_clock_hz=2600 * 1e6,  # TODO
-        ops_per_core_per_cycle= {
-            
-        },
+        ops_per_core_per_cycle={},
     ),
     # Source:
     # @lint-ignore https://www.amd.com/content/dam/amd/en/documents/\
