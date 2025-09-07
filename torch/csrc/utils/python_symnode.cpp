@@ -53,4 +53,21 @@ py::handle get_symbool_class() {
 #endif
 }
 
+py::handle get_dynint_class() {
+  // NB: leak
+#if IS_PYBIND_2_13_PLUS
+  PYBIND11_CONSTINIT static py::gil_safe_call_once_and_store<py::object>
+      storage;
+  return storage
+      .call_once_and_store_result([]() -> py::object {
+        return py::module::import("torch.fx.experimental.symbolic_shapes").attr("DynamicInt");
+      })
+      .get_stored();
+#else
+  static py::handle symbool_class =
+      py::object(py::module::import("torch.fx.experimental.symbolic_shapes").attr("DynamicInt")).release();
+  return symbool_class;
+#endif
+}
+
 } // namespace torch

@@ -174,6 +174,7 @@ __all__ = [
     "ValueRangesSLoc",
     "SymIntEqByExpr",
     "Specialization",
+    "DynamicInt",
 ]
 
 # FX node metadata keys for symbolic shape FX graph.
@@ -1023,6 +1024,34 @@ def find_symbol_binding_fx_nodes(
         if (s := is_symbol_binding_fx_node(node)) is not None and s not in r:
             r[s] = node
     return r
+
+
+class _DynamicScalar(abc.ABC):
+    def __new__(cls, *args):
+        if cls is _DynamicScalar:
+            raise TypeError("_DynamicScalar is an abstract base class, use DynamicInt.")
+        return super().__new__(cls, *args)
+
+
+class DynamicInt(_DynamicScalar, int):
+    def __new__(cls, val):
+        assert isinstance(val, int)
+        val = int(val)
+        obj = super().__new__(cls, val)
+        obj.val = val  # remove val
+        return obj
+
+    def __repr__(self):
+        return f"DynamicInt({self.val})"
+
+    def __str__(self):
+        return self.__repr__()
+
+    def __floordiv__(self, other):  # // was casting to int without these overrides?
+        return DynamicInt(self.val // other)
+
+    def __rfloordiv__(self, other):
+        return DynamicInt(other // self.val)
 
 
 @dataclass(frozen=True)
