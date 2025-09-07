@@ -82,10 +82,8 @@ class DeviceSpec:
     dram_bw_gbs: float
     dram_gb: float
     sm_count: Optional[int]
-    cores_per_sm: Optional[int]
     clock_hz: Optional[float]
     memory_clock_hz: Optional[float]
-    ops_per_core_per_cycle: dict[Union[torch.dtype, str], int]
 
 
 class DeviceInfo:
@@ -99,9 +97,7 @@ class DeviceInfo:
 
     The class can provide information about:
     - Streaming multiprocessor (SM) count
-    - Cores per streaming multiprocessor
     - Clock frequencies (core and memory)
-    - Operations per core per cycle
     - DRAM capacity and bandwidth
     - Peak FLOPS/TOPS performance
 
@@ -111,26 +107,19 @@ class DeviceInfo:
 
     Example usage:
         device_name = torch.cuda.get_device_name()
-        sm_count = DeviceInfo.lookup_sm_count(device_name)
         peak_tops = DeviceInfo.lookup_tops(device_name, torch.float32)
     """
 
     @staticmethod
     def _hardware_lookup_sm_count() -> Optional[int]:
         """Get the number of streaming multiprocessors from the hardware."""
-
-        # Fall back to NVIDIA
         try:
+            # rely on device_properties api
             device_props = torch.cuda.get_device_properties(0)
             return device_props.multi_processor_count
         except Exception:
             return None
 
-    @staticmethod
-    def _hardware_lookup_cores_per_sm() -> Optional[int]:
-        """Get the number of cores per streaming multiprocessor from the hardware."""
-        # This information is not directly available via NVML currently
-        return None
 
     @staticmethod
     def _hardware_lookup_clock_hz() -> Optional[float]:
@@ -244,12 +233,6 @@ class DeviceInfo:
             log.info("Failed to get AMD memory clock frequency: %s", e)
             return None
 
-    @staticmethod
-    def _hardware_lookup_ops_per_core_per_cycle() -> Optional[int]:
-        """Get the operations per core per cycle from the hardware."""
-        # This information is not directly available via NVML
-        # and requires architecture-specific lookup
-        return None
 
     @staticmethod
     def _hardware_dram_gb() -> Optional[float]:
@@ -258,37 +241,6 @@ class DeviceInfo:
             device_props = torch.cuda.get_device_properties(0)
             # Convert from bytes to GB
             return device_props.total_memory / (1024**3)
-        except Exception:
-            return None
-
-    @staticmethod
-    def _hardware_dram_bw_gbs() -> Optional[float]:
-        """Get the DRAM bandwidth in GB/s from the hardware."""
-        if torch.version.hip is not None:
-            amd_bw = DeviceInfo._amd_hardware_dram_bw_gbs()
-            return amd_bw
-
-        pynvml = _get_pynvml()
-        if pynvml is None:
-            return None
-
-        try:
-            pynvml.nvmlInit()
-            handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-
-            mem_clock_mhz = pynvml.nvmlDeviceGetClockInfo(handle, pynvml.NVML_CLOCK_MEM)
-            bus_width_bits = pynvml.nvmlDeviceGetMemoryBusWidth(handle)
-
-            mem_clock_hz = mem_clock_mhz * 1e6
-            # Effective rate (GDDR uses DDR so *2)
-            effective_rate = mem_clock_hz * 2
-            # Theoretical peak bandwidth in bytes/sec
-            peak_bw = (effective_rate * bus_width_bits) / 8
-            # convert to GB/s
-            peak_bw = peak_bw / (1024**3)
-            pynvml.nvmlShutdown()
-            return peak_bw
-
         except Exception:
             return None
 
@@ -346,12 +298,9 @@ class DeviceInfo:
         """
         hardware_lookup_methods = {
             "sm_count": DeviceInfo._hardware_lookup_sm_count,
-            "cores_per_sm": DeviceInfo._hardware_lookup_cores_per_sm,
             "clock_hz": DeviceInfo._hardware_lookup_clock_hz,
             "memory_clock_hz": DeviceInfo._hardware_lookup_memory_clock_hz,
-            "ops_per_core_per_cycle": DeviceInfo._hardware_lookup_ops_per_core_per_cycle,
             "dram_gb": DeviceInfo._hardware_dram_gb,
-            "dram_bw_gbs": DeviceInfo._hardware_dram_bw_gbs,
             # tops missing from here because of custom implementation
         }
 
@@ -376,11 +325,6 @@ class DeviceInfo:
         result = DeviceInfo._generic_lookup(device_name, "sm_count")
         return result if isinstance(result, int) or result is None else None
 
-    @staticmethod
-    def lookup_cores_per_sm(device_name: str) -> Optional[int]:
-        """Get the number of cores per streaming multiprocessor for the current device."""
-        result = DeviceInfo._generic_lookup(device_name, "cores_per_sm")
-        return result if isinstance(result, int) or result is None else None
 
     @staticmethod
     def lookup_clock_hz(device_name: str) -> Optional[float]:
@@ -393,16 +337,6 @@ class DeviceInfo:
         """Get the memory clock speed in Hz for the current device."""
         result = DeviceInfo._generic_lookup(device_name, "memory_clock_hz")
         return result if isinstance(result, (int, float)) or result is None else None
-
-    @staticmethod
-    def lookup_ops_per_core_per_cycle(
-        device_name: str, dtype: torch.dtype
-    ) -> Optional[int]:
-        """Get the operations per core per cycle for the current device."""
-        # Attempt to lookup from device mapping
-        device_info = lookup_device_info(device_name)
-        if device_info is not None and device_info.ops_per_core_per_cycle is not None:
-            return device_info.ops_per_core_per_cycle.get(dtype, None)
 
     @staticmethod
     def lookup_dram_gb(device_name: str) -> Optional[float]:
@@ -421,10 +355,6 @@ class DeviceInfo:
         lookupable = torch.cuda.is_available() and (
             torch.cuda.get_device_name() == device_name
         )
-        if lookupable:
-            hardware_bw = DeviceInfo._hardware_dram_bw_gbs()
-            if hardware_bw is not None:
-                return hardware_bw
 
         # Fall back to datasheet value with memory clock scaling
         device_info = lookup_device_info(device_name)
@@ -454,12 +384,9 @@ class DeviceInfo:
         device_name: str,
         dtype: torch.dtype,
         is_tf32: bool = False,
-        force_datasheet: bool = False,
     ) -> Optional[float]:
         """
-        Calculate peak FLOPS for the current device.
-
-        Uses the formula: sm_count * cores_per_sm * clock_hz * ops_per_core_per_cycle
+        Our best attempt to calculate the current tops. Adjust by the ratio of current clock speed to theoretical.
 
         Returns:
             Peak FLOPS as a float, or None if calculation fails
@@ -523,26 +450,9 @@ _device_mapping: dict[str, DeviceSpec] = {
         dram_bw_gbs=3350,
         dram_gb=80,
         sm_count=132,
-        cores_per_sm=128,
         # boost clock
         clock_hz=1.98e9,
         memory_clock_hz=1.4e10,
-        # These are estimates based on relative flop numbers.
-        # FMA is included here.
-        ops_per_core_per_cycle={
-            torch.float64: 2,
-            torch.float32: 4,
-            "torch.tf32": 30,
-            torch.bfloat16: 60,
-            torch.float16: 60,
-            torch.float8_e8m0fnu: 120,
-            torch.float8_e8m0fnu: 120,
-            torch.float8_e4m3fnuz: 120,
-            torch.float8_e5m2: 120,
-            torch.float8_e5m2fnuz: 120,
-            torch.float8_e8m0fnu: 120,
-            torch.int8: 120,
-        },
         # bus: 5120 bit
     ),
     # Source:
@@ -562,19 +472,9 @@ _device_mapping: dict[str, DeviceSpec] = {
         dram_bw_gbs=2039.0,
         dram_gb=80.0,
         sm_count=108,
-        cores_per_sm=64,
         # boost clock
         clock_hz=1410 * 1e6,
         memory_clock_hz=1593 * 1e6,
-        ops_per_core_per_cycle={
-            torch.float64: 2,
-            torch.float32: 2,
-            torch.bfloat16: 32,
-            torch.float16: 32,
-            # Not in datasheet: float8
-            torch.int8: 64,
-            "torch.tf32": 32,
-        },
     ),
     # Source:
     # @lint-ignore https://resources.nvidia.com/en-us-gpu-resources/l4-tensor-datasheet
@@ -598,19 +498,9 @@ _device_mapping: dict[str, DeviceSpec] = {
         dram_bw_gbs=3350,
         dram_gb=24,
         sm_count=58,
-        cores_per_sm=128,
-        clock_hz=2040 * 1e6,  # TODO
+        clock_hz=2040 * 1e6,
         # bus: 192 bit
-        memory_clock_hz=6251 * 1e6,  # TODO
-        ops_per_core_per_cycle={
-            torch.float64: 2,
-            torch.float32: 2,
-            torch.bfloat16: 32,
-            torch.float16: 32,
-            # Not in datasheet: float8
-            torch.int8: 64,
-            "torch.tf32": 32,
-        },
+        memory_clock_hz=6251 * 1e6,
     ),
     # Source:
     # @lint-ignore https://www.amd.com/content/dam/amd/en/documents\
@@ -633,11 +523,9 @@ _device_mapping: dict[str, DeviceSpec] = {
         dram_bw_gbs=5300.0,
         dram_gb=128.0,
         sm_count=228,
-        cores_per_sm=64,
         # bus: 8192 bit
         clock_hz=2100 * 1e6,
-        memory_clock_hz=2600 * 1e6,  # TODO
-        ops_per_core_per_cycle={},
+        memory_clock_hz=2600 * 1e6,
     ),
     # Source:
     # @lint-ignore https://www.amd.com/content/dam/amd/en/documents/\
@@ -659,11 +547,9 @@ _device_mapping: dict[str, DeviceSpec] = {
         },
         dram_bw_gbs=5300.0,
         dram_gb=192.0,
-        sm_count=None,  # TODO
-        cores_per_sm=None,  # TODO
-        clock_hz=None,  # TODO
-        memory_clock_hz=None,  # TODO
-        ops_per_core_per_cycle=None,  # TODO
+        sm_count=304,
+        clock_hz=2100 * 1e6,
+        memory_clock_hz=5200 * 1e6,
     ),
     # Source:
     # @lint-ignore https://www.amd.com/content/dam/amd/\
@@ -688,11 +574,9 @@ _device_mapping: dict[str, DeviceSpec] = {
         # pcie4.0x16
         dram_bw_gbs=1600.0,
         dram_gb=64.0,
-        sm_count=None,  # TODO
-        cores_per_sm=None,  # TODO
-        clock_hz=None,  # TODO
-        memory_clock_hz=None,  # TODO
-        ops_per_core_per_cycle=None,  # TODO
+        sm_count=104,
+        clock_hz=1700 * 1e6,
+        memory_clock_hz=1600 * 1e6,
     ),
 }
 _device_mapping["AMD INSTINCT MI300X"] = _device_mapping["AMD MI300X"]

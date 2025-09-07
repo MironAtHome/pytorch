@@ -1,5 +1,6 @@
 # Owner(s): ["module: inductor"]
 
+import unittest
 from unittest.mock import call, MagicMock, patch
 
 import torch
@@ -291,9 +292,9 @@ class TestDeviceInfo(TestCase):
             patch("torch.cuda.get_device_name", return_value="AMD MI300X"),
         ):
             flops = DeviceInfo.lookup_tops(
-                device_name="AMD MI300X", dtype=torch.float32, force_datasheet=False
+                device_name="AMD MI300X", dtype=torch.float32
             )
-            # Now uses datasheet value (163.4 TOPS) with clock adjustment 
+            # Now uses datasheet value (163.4 TOPS) with clock adjustment
             # Device mapping has clock_hz=2100*1e6, so ratio = 1.5e9 / (2100*1e6) = ~0.714
             datasheet_flops = 163.4 * 1e12
             device_info = lookup_device_info("AMD MI300X")
@@ -309,13 +310,14 @@ class TestDeviceInfo(TestCase):
         with (
             patch("torch.cuda.get_device_name") as mock_get_device_name,
             patch("torch.cuda.is_available", return_value=True),
+            patch.object(DeviceInfo, "lookup_clock_hz", return_value=1.98e9 / 2),  # Use datasheet clock
         ):
             mock_get_device_name.return_value = "NVIDIA H100"
 
             flops = DeviceInfo.lookup_tops(
-                device_name="NVIDIA H100", dtype=torch.float32, force_datasheet=True
+                device_name="NVIDIA H100", dtype=torch.float32
             )
-            expected_flops = 67.0 * 1e12
+            expected_flops = 67.0 * 1e12 / 2
             self.assertEqual(flops, expected_flops)
 
     def test_flops_fallback_to_datasheet(self):
@@ -323,13 +325,14 @@ class TestDeviceInfo(TestCase):
         with (
             patch("torch.cuda.get_device_name") as mock_get_device_name,
             patch("torch.cuda.is_available", return_value=True),
+            patch.object(DeviceInfo, "lookup_clock_hz", return_value=1.98e9 / 2),  # Use datasheet clock
         ):
             mock_get_device_name.return_value = "NVIDIA H100"
 
             flops = DeviceInfo.lookup_tops(
-                device_name="NVIDIA H100", dtype=torch.float32, force_datasheet=False
+                device_name="NVIDIA H100", dtype=torch.float32
             )
-            expected_flops = 67.0 * 1e12
+            expected_flops = 67.0 * 1e12 / 2
             self.assertEqual(flops, expected_flops)
 
     def test_flops_clock_adjustment_in_fallback(self):
@@ -340,9 +343,7 @@ class TestDeviceInfo(TestCase):
             dram_bw_gbs=1000.0,
             dram_gb=16.0,
             sm_count=None,
-            cores_per_sm=None,
             clock_hz=1.5e9,
-            ops_per_core_per_cycle=None,
         )
 
         with (
@@ -358,7 +359,7 @@ class TestDeviceInfo(TestCase):
                 DeviceInfo, "_hardware_lookup_clock_hz", return_value=3.0e9
             ):
                 flops = DeviceInfo.lookup_tops(
-                    "Custom Device", dtype=torch.float32, force_datasheet=False
+                    "Custom Device", dtype=torch.float32
                 )
 
                 datasheet_flops = 100.0 * 1e12
@@ -375,9 +376,7 @@ class TestDeviceInfo(TestCase):
             dram_bw_gbs=1000.0,
             dram_gb=16.0,
             sm_count=None,
-            cores_per_sm=None,
             clock_hz=None,
-            ops_per_core_per_cycle=None,
         )
         mock_lookup.return_value = device_info
 
@@ -388,7 +387,7 @@ class TestDeviceInfo(TestCase):
                 DeviceInfo, "_hardware_lookup_clock_hz", return_value=3.0e9
             ):
                 flops = DeviceInfo.lookup_tops(
-                    "NVIDIA H100", dtype=torch.float32, force_datasheet=False
+                    "NVIDIA H100", dtype=torch.float32
                 )
 
                 expected_flops = 100.0 * 1e12
@@ -403,7 +402,7 @@ class TestDeviceInfo(TestCase):
                 DeviceInfo, "_hardware_lookup_clock_hz", return_value=None
             ):
                 flops = DeviceInfo.lookup_tops(
-                    "NVIDIA H100", dtype=torch.float32, force_datasheet=False
+                    "NVIDIA H100", dtype=torch.float32
                 )
 
                 expected_flops = 67.0 * 1e12
@@ -420,13 +419,13 @@ class TestDeviceInfo(TestCase):
                 "torch._inductor.analysis.device_info.datasheet_tops", return_value=None
             ):
                 flops = DeviceInfo.lookup_tops(
-                    "NVIDIA H100", dtype=torch.float32, force_datasheet=True
+                    "NVIDIA H100", dtype=torch.float32
                 )
                 self.assertIsNone(flops)
 
             # When cuda is not available, hardware lookup is skipped and datasheet is used
             flops = DeviceInfo.lookup_tops(
-                "NVIDIA H100", dtype=torch.float32, force_datasheet=False
+                "NVIDIA H100", dtype=torch.float32
             )
             self.assertIsNone(
                 flops
@@ -438,20 +437,24 @@ class TestDeviceInfo(TestCase):
             mock_get_device_name.return_value = "Unknown Device"
 
             flops = DeviceInfo.lookup_tops(
-                "Unknown Device", dtype=torch.float32, force_datasheet=False
+                "Unknown Device", dtype=torch.float32
             )
             # Should be None for unknown device
             self.assertIsNone(flops)
 
     def test_flops_partial_hardware_values(self):
         """Test FLOPS calculation with some hardware values missing."""
-        with patch("torch.cuda.get_device_name") as mock_get_device_name:
+        with (
+            patch("torch.cuda.get_device_name") as mock_get_device_name,
+            patch("torch.cuda.is_available", return_value=True),
+            patch.object(DeviceInfo, "lookup_clock_hz", return_value=1.98e9 / 2),  # Use datasheet clock
+        ):
             mock_get_device_name.return_value = "NVIDIA H100"
 
             flops = DeviceInfo.lookup_tops(
-                device_name="NVIDIA H100", dtype=torch.float32, force_datasheet=False
+                device_name="NVIDIA H100", dtype=torch.float32
             )
-            expected_flops = 67.0 * 1e12
+            expected_flops = 67.0 * 1e12 / 2
             self.assertEqual(flops, expected_flops)
 
     def test_flops_exception_handling(self):
@@ -463,13 +466,15 @@ class TestDeviceInfo(TestCase):
                 side_effect=Exception("Hardware error"),
             ),
             patch("torch.cuda.get_device_name") as mock_get_device_name,
+            patch("torch.cuda.is_available", return_value=True),
+            patch.object(DeviceInfo, "lookup_clock_hz", return_value=1.98e9 / 2),  # Use datasheet clock
         ):
             mock_get_device_name.return_value = "NVIDIA H100"
 
             flops = DeviceInfo.lookup_tops(
-                "NVIDIA H100", dtype=torch.float32, force_datasheet=False
+                "NVIDIA H100", dtype=torch.float32
             )
-            expected_flops = 67.0 * 1e12
+            expected_flops = 67.0 * 1e12 / 2
             self.assertEqual(flops, expected_flops)
 
     def test_flops_integration_with_hardware_lookup(self):
@@ -482,7 +487,7 @@ class TestDeviceInfo(TestCase):
             patch("torch.cuda.get_device_name", return_value=dn),
         ):
             flops = DeviceInfo.lookup_tops(
-                device_name=dn, dtype=torch.float32, force_datasheet=False
+                device_name=dn, dtype=torch.float32
             )
             # Now uses datasheet value (67.0 TOPS) with clock adjustment
             # Device mapping has clock_hz=1.98e9, so ratio = 1500*1e6 / 1.98e9 = ~0.7576
@@ -494,6 +499,349 @@ class TestDeviceInfo(TestCase):
             else:
                 expected_flops = datasheet_flops
             self.assertEqual(flops, expected_flops)
+
+    @unittest.skipIf(
+        False, "pynvml and amdsmi are not available in CI, run these tests locally"
+    )
+    def test_pynvml_integration(self):
+        """Test direct pynvml library integration."""
+        try:
+            import pynvml
+
+            # Test basic NVML initialization and device access
+            pynvml.nvmlInit()
+            handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+
+            # Test clock frequency retrieval
+            sm_clock_mhz = pynvml.nvmlDeviceGetClockInfo(handle, pynvml.NVML_CLOCK_SM)
+            self.assertIsInstance(sm_clock_mhz, int)
+            self.assertGreater(sm_clock_mhz, 0)
+
+            # Test memory clock frequency retrieval
+            mem_clock_mhz = pynvml.nvmlDeviceGetClockInfo(handle, pynvml.NVML_CLOCK_MEM)
+            self.assertIsInstance(mem_clock_mhz, int)
+            self.assertGreater(mem_clock_mhz, 0)
+
+            # Test memory bus width retrieval
+            bus_width_bits = pynvml.nvmlDeviceGetMemoryBusWidth(handle)
+            self.assertIsInstance(bus_width_bits, int)
+            self.assertGreater(bus_width_bits, 0)
+
+            # Test bandwidth calculation (same as device_info.py implementation)
+            mem_clock_hz = mem_clock_mhz * 1e6
+            effective_rate = mem_clock_hz * 2  # GDDR uses DDR so *2
+            peak_bw = (effective_rate * bus_width_bits) / 8
+            peak_bw_gbs = peak_bw / (1024**3)
+
+            self.assertIsInstance(peak_bw_gbs, float)
+            self.assertGreater(peak_bw_gbs, 0)
+
+            pynvml.nvmlShutdown()
+
+        except ImportError:
+            self.fail(
+                "pynvml library not available - install with 'pip install nvidia-ml-py'"
+            )
+        except Exception as e:
+            self.fail(f"pynvml integration failed: {e}")
+
+    @unittest.skipIf(
+        False, "pynvml and amdsmi are not available in CI, run these tests locally"
+    )
+    @unittest.skipIf(
+        not torch.version.hip, "only amd"
+    )
+    def test_rocm_smi_integration(self):
+        """Test direct rocm_smi library integration."""
+        try:
+            import rocm_smi
+
+            # Test basic ROCm SMI initialization
+            rocm_smi.rsmi_init()
+
+            # Test system clock frequency retrieval
+            sys_clock_mhz = rocm_smi.rsmi_dev_gpu_clk_freq_get(
+                0, rocm_smi.RSMI_CLK_TYPE_SYS
+            )
+            self.assertIsInstance(sys_clock_mhz, int)
+            self.assertGreater(sys_clock_mhz, 0)
+
+            # Test memory clock frequency retrieval
+            mem_clock_mhz = rocm_smi.rsmi_dev_gpu_clk_freq_get(
+                0, rocm_smi.RSMI_CLK_TYPE_MEM
+            )
+            self.assertIsInstance(mem_clock_mhz, int)
+            self.assertGreater(mem_clock_mhz, 0)
+
+            rocm_smi.rsmi_shut_down()
+
+        except ImportError:
+            self.fail("rocm_smi library not available - install ROCm SMI")
+        except Exception as e:
+            self.fail(f"rocm_smi integration failed: {e}")
+
+    @unittest.skipIf(
+        False, "pynvml and amdsmi are not available in CI, run these tests locally"
+    )
+    @unittest.skipIf(
+        not torch.version.hip, "only amd"
+    )
+    def test_amdsmi_integration(self):
+        """Test direct amdsmi library integration."""
+        try:
+            import amdsmi
+
+            # Test basic AMD SMI initialization
+            amdsmi.amdsmi_init()
+
+            # Test device handle retrieval
+            device_handle = amdsmi.amdsmi_get_processor_handle(0)
+            self.assertIsNotNone(device_handle)
+
+            # Test GPU clock info retrieval
+            clock_info = amdsmi.amdsmi_get_gpu_clock_info(device_handle)
+            self.assertTrue(hasattr(clock_info, "current_clk"))
+            self.assertIsInstance(clock_info.current_clk, int)
+            self.assertGreater(clock_info.current_clk, 0)
+
+            # Test GPU memory clock info retrieval
+            mem_clock_info = amdsmi.amdsmi_get_gpu_memory_clock_info(device_handle)
+            self.assertTrue(hasattr(mem_clock_info, "current_clk"))
+            self.assertIsInstance(mem_clock_info.current_clk, int)
+            self.assertGreater(mem_clock_info.current_clk, 0)
+
+            amdsmi.amdsmi_shut_down()
+
+        except ImportError:
+            self.fail("amdsmi library not available - install AMD SMI")
+        except Exception as e:
+            self.fail(f"amdsmi integration failed: {e}")
+
+    @unittest.skipIf(
+        False, "pynvml and amdsmi are not available in CI, run these tests locally"
+    )
+    @unittest.skipIf(
+        torch.version.hip, "only nvidia"
+    )
+    def test_pynvml_error_handling(self):
+        """Test pynvml error handling for invalid operations."""
+        try:
+            import pynvml
+
+            pynvml.nvmlInit()
+
+            # Test invalid device index - should raise exception
+            with self.assertRaises(Exception):
+                pynvml.nvmlDeviceGetHandleByIndex(999)  # Invalid index
+
+            pynvml.nvmlShutdown()
+
+        except ImportError:
+            self.skipTest("pynvml library not available")
+
+    @unittest.skipIf(
+        False, "pynvml and amdsmi are not available in CI, run these tests locally"
+    )
+    @unittest.skipIf(
+        not torch.version.hip, "only amd"
+    )
+    def test_amd_smi_error_handling(self):
+        """Test AMD SMI error handling for invalid operations."""
+        # Try rocm_smi first
+        try:
+            import rocm_smi
+
+            rocm_smi.rsmi_init()
+
+            # Test invalid device index - should raise exception or return error
+            try:
+                rocm_smi.rsmi_dev_gpu_clk_freq_get(999, rocm_smi.RSMI_CLK_TYPE_SYS)
+            except Exception:
+                pass  # Expected for invalid device
+
+            rocm_smi.rsmi_shut_down()
+            return
+
+        except ImportError:
+            pass
+
+        # Try amdsmi if rocm_smi not available
+        try:
+            import amdsmi
+
+            amdsmi.amdsmi_init()
+
+            # Test invalid device index - should raise exception
+            with self.assertRaises(Exception):
+                amdsmi.amdsmi_get_processor_handle(999)  # Invalid index
+
+            amdsmi.amdsmi_shut_down()
+
+        except ImportError:
+            self.skipTest("Neither rocm_smi nor amdsmi libraries available")
+
+    @unittest.skipIf(
+        False, "pynvml and amdsmi are not available in CI, run these tests locally"
+    )
+    @unittest.skipIf(
+        not torch.version.hip, "only amd"
+    )
+    def test_library_versions_and_constants_amd(self):
+        """Test that expected constants and versions are available."""
+        # Test rocm_smi constants
+        import rocm_smi
+
+        # Check that required constants exist
+        self.assertTrue(hasattr(rocm_smi, "RSMI_CLK_TYPE_SYS"))
+        self.assertTrue(hasattr(rocm_smi, "RSMI_CLK_TYPE_MEM"))
+
+        # Check that required functions exist
+        self.assertTrue(hasattr(rocm_smi, "rsmi_init"))
+        self.assertTrue(hasattr(rocm_smi, "rsmi_dev_gpu_clk_freq_get"))
+        self.assertTrue(hasattr(rocm_smi, "rsmi_shut_down"))
+
+        import amdsmi
+
+        # Check that required functions exist
+        self.assertTrue(hasattr(amdsmi, "amdsmi_init"))
+        self.assertTrue(hasattr(amdsmi, "amdsmi_get_processor_handle"))
+        self.assertTrue(hasattr(amdsmi, "amdsmi_get_gpu_clock_info"))
+        self.assertTrue(hasattr(amdsmi, "amdsmi_get_gpu_memory_clock_info"))
+        self.assertTrue(hasattr(amdsmi, "amdsmi_shut_down"))
+
+    @unittest.skipIf(
+        False, "pynvml and amdsmi are not available in CI, run these tests locally"
+    )
+    @unittest.skipIf(
+        torch.version.hip, "only nvidia"
+    )
+    def test_library_versions_and_constants_nvidia(self):
+        """Test that expected constants and versions are available."""
+        # Test pynvml constants
+        import pynvml
+
+        # Check that required constants exist
+        self.assertTrue(hasattr(pynvml, "NVML_CLOCK_SM"))
+        self.assertTrue(hasattr(pynvml, "NVML_CLOCK_MEM"))
+
+        # Check that required functions exist
+        self.assertTrue(hasattr(pynvml, "nvmlInit"))
+        self.assertTrue(hasattr(pynvml, "nvmlDeviceGetHandleByIndex"))
+        self.assertTrue(hasattr(pynvml, "nvmlDeviceGetClockInfo"))
+        self.assertTrue(hasattr(pynvml, "nvmlDeviceGetMemoryBusWidth"))
+        self.assertTrue(hasattr(pynvml, "nvmlShutdown"))
+
+    def test_dram_bw_hardware_calculation(self):
+        """Test DRAM bandwidth calculation with memory clock adjustment."""
+        with (
+            patch.object(DeviceInfo, "lookup_memory_clock_hz", return_value=7e9),
+            patch("torch.cuda.is_available", return_value=True),
+            patch("torch.cuda.get_device_name", return_value="AMD MI300X"),
+        ):
+            dram_bw = DeviceInfo.lookup_dram_bw_gbs(device_name="AMD MI300X")
+            # Uses datasheet value (5300.0 GB/s) with memory clock adjustment
+            # Device mapping has memory_clock_hz=5200*1e6, so ratio = 7e9 / (5200*1e6) = ~1.346
+            datasheet_bw = 5300.0
+            device_info = lookup_device_info("AMD MI300X")
+            if device_info and device_info.memory_clock_hz:
+                memory_clock_ratio = 7e9 / device_info.memory_clock_hz
+                expected_bw = datasheet_bw * memory_clock_ratio
+            else:
+                expected_bw = datasheet_bw
+            self.assertEqual(dram_bw, expected_bw)
+
+    def test_dram_bw_datasheet_calculation(self):
+        """Test DRAM bandwidth calculation using datasheet values."""
+        with (
+            patch("torch.cuda.get_device_name") as mock_get_device_name,
+            patch("torch.cuda.is_available", return_value=True),
+            patch.object(DeviceInfo, "lookup_memory_clock_hz", return_value=1.4e10 / 2),  # Use half datasheet memory clock
+        ):
+            mock_get_device_name.return_value = "NVIDIA H100"
+
+            dram_bw = DeviceInfo.lookup_dram_bw_gbs(device_name="NVIDIA H100")
+            expected_bw = 3350 / 2  # Datasheet bandwidth scaled by memory clock ratio
+            self.assertEqual(dram_bw, expected_bw)
+
+    def test_dram_bw_fallback_to_datasheet(self):
+        """Test DRAM bandwidth fallback to datasheet when hardware lookup fails."""
+        with (
+            patch("torch.cuda.get_device_name") as mock_get_device_name,
+            patch("torch.cuda.is_available", return_value=True),
+            patch.object(DeviceInfo, "lookup_memory_clock_hz", return_value=1.4e10 / 2),  # Use half datasheet memory clock
+        ):
+            mock_get_device_name.return_value = "NVIDIA H100"
+
+            dram_bw = DeviceInfo.lookup_dram_bw_gbs(device_name="NVIDIA H100")
+            expected_bw = 3350 / 2  # Datasheet bandwidth scaled by memory clock ratio
+            self.assertEqual(dram_bw, expected_bw)
+
+    def test_dram_bw_memory_clock_adjustment_in_fallback(self):
+        """Test memory clock adjustment when falling back to datasheet."""
+        custom_device_info = DeviceSpec(
+            memory_clock_hz=2e9,
+            tops={torch.float32: 100.0},
+            dram_bw_gbs=1000.0,
+            dram_gb=16.0,
+            sm_count=None,
+            clock_hz=1.5e9,
+        )
+
+        with (
+            patch("torch.cuda.get_device_name") as mock_get_device_name,
+            patch(
+                "torch._inductor.analysis.device_info.lookup_device_info"
+            ) as mock_lookup,
+        ):
+            mock_get_device_name.return_value = "Custom Device"
+            mock_lookup.return_value = custom_device_info
+
+            with patch.object(
+                DeviceInfo, "lookup_memory_clock_hz", return_value=4e9
+            ):
+                dram_bw = DeviceInfo.lookup_dram_bw_gbs("Custom Device")
+
+                datasheet_bw = 1000.0
+                memory_clock_ratio = 4e9 / 2e9
+                expected_bw = datasheet_bw * memory_clock_ratio
+                self.assertEqual(dram_bw, expected_bw)
+
+    @patch("torch._inductor.analysis.device_info.lookup_device_info")
+    def test_dram_bw_memory_clock_adjustment_no_expected_clock(self, mock_lookup):
+        """Test fallback behavior when device mapping has None for memory_clock_hz."""
+        device_info = DeviceSpec(
+            memory_clock_hz=None,
+            tops={torch.float32: 100.0},
+            dram_bw_gbs=1000.0,
+            dram_gb=16.0,
+            sm_count=None,
+            clock_hz=1.5e9,
+        )
+        mock_lookup.return_value = device_info
+
+        with patch("torch.cuda.get_device_name") as mock_get_device_name:
+            mock_get_device_name.return_value = "NVIDIA H100"
+
+            with patch.object(
+                DeviceInfo, "lookup_memory_clock_hz", return_value=4e9
+            ):
+                dram_bw = DeviceInfo.lookup_dram_bw_gbs("NVIDIA H100")
+
+                expected_bw = 1000.0  # No memory clock adjustment
+                self.assertEqual(dram_bw, expected_bw)
+
+    def test_dram_bw_memory_clock_adjustment_none_clock(self):
+        """Test fallback behavior when memory clock lookup returns None."""
+        with patch("torch.cuda.get_device_name") as mock_get_device_name:
+            mock_get_device_name.return_value = "NVIDIA H100"
+
+            with patch.object(
+                DeviceInfo, "lookup_memory_clock_hz", return_value=None
+            ):
+                dram_bw = DeviceInfo.lookup_dram_bw_gbs("NVIDIA H100")
+
+                expected_bw = 3350  # Datasheet value without adjustment
+                self.assertEqual(dram_bw, expected_bw)
 
 
 if __name__ == "__main__":
