@@ -49,7 +49,7 @@ def _get_amd_smi() -> Optional[Any]:
         _amd_smi_cache = None
 
         # Try various possible AMD SMI library names
-        possible_libraries = ["amdsmi", "rocm_smi"]
+        possible_libraries = ["amdsmi"]
 
         for lib_name in possible_libraries:
             try:
@@ -120,7 +120,6 @@ class DeviceInfo:
         except Exception:
             return None
 
-
     @staticmethod
     def _hardware_lookup_clock_hz() -> Optional[float]:
         """Get the clock speed in Hz from the hardware."""
@@ -151,14 +150,7 @@ class DeviceInfo:
 
         try:
             # TODO
-            if hasattr(amd_smi, "rsmi_init"):
-                amd_smi.rsmi_init()
-                clock_mhz = amd_smi.rsmi_dev_gpu_clk_freq_get(
-                    0, amd_smi.RSMI_CLK_TYPE_SYS
-                )
-                amd_smi.rsmi_shut_down()
-                return clock_mhz * 1e6
-            elif hasattr(amd_smi, "amdsmi_init"):
+            if hasattr(amd_smi, "amdsmi_init"):
                 amd_smi.amdsmi_init()
                 device_handle = amd_smi.amdsmi_get_processor_handle(0)
                 clock_info = amd_smi.amdsmi_get_gpu_clock_info(device_handle)
@@ -207,14 +199,7 @@ class DeviceInfo:
 
         try:
             # TODO
-            if hasattr(amd_smi, "rsmi_init"):
-                amd_smi.rsmi_init()
-                mem_clock_mhz = amd_smi.rsmi_dev_gpu_clk_freq_get(
-                    0, amd_smi.RSMI_CLK_TYPE_MEM
-                )
-                amd_smi.rsmi_shut_down()
-                return mem_clock_mhz * 1e6
-            elif hasattr(amd_smi, "amdsmi_init"):
+            if hasattr(amd_smi, "amdsmi_init"):
                 amd_smi.amdsmi_init()
                 device_handle = amd_smi.amdsmi_get_processor_handle(0)
                 mem_clock_info = amd_smi.amdsmi_get_gpu_memory_clock_info(device_handle)
@@ -233,7 +218,6 @@ class DeviceInfo:
             log.info("Failed to get AMD memory clock frequency: %s", e)
             return None
 
-
     @staticmethod
     def _hardware_dram_gb() -> Optional[float]:
         """Get the DRAM memory size in GB from the hardware."""
@@ -242,44 +226,6 @@ class DeviceInfo:
             # Convert from bytes to GB
             return device_props.total_memory / (1024**3)
         except Exception:
-            return None
-
-    @staticmethod
-    def _amd_hardware_dram_bw_gbs() -> Optional[float]:
-        """Get the DRAM bandwidth in GB/s from AMD hardware."""
-        amd_smi = _get_amd_smi()
-        if amd_smi is None:
-            return None
-
-        try:
-            # TODO
-            if hasattr(amd_smi, "rsmi_init"):
-                # ROCm SMI pattern
-                amd_smi.rsmi_init()
-                # Memory bandwidth is typically not directly available
-                # Would need memory clock and bus width to calculate
-                # For now, return None as this requires device-specific calculations
-                amd_smi.rsmi_shut_down()
-                log.info(
-                    "AMD memory bandwidth calculation not implemented. Requires memory clock and bus width."
-                )
-                return None
-            elif hasattr(amd_smi, "amdsmi_init"):
-                # AMD SMI pattern
-                amd_smi.amdsmi_init()
-                # Similar issue - bandwidth calculation requires multiple parameters
-                amd_smi.amdsmi_shut_down()
-                log.info(
-                    "AMD memory bandwidth calculation not implemented. Requires memory clock and bus width."
-                )
-                return None
-            else:
-                log.info(
-                    "Unknown AMD SMI library API. Cannot determine memory bandwidth."
-                )
-                return None
-        except Exception as e:
-            log.info("Failed to get AMD memory bandwidth: %s", e)
             return None
 
     @staticmethod
@@ -324,7 +270,6 @@ class DeviceInfo:
         """Get the number of streaming multiprocessors for the current device."""
         result = DeviceInfo._generic_lookup(device_name, "sm_count")
         return result if isinstance(result, int) or result is None else None
-
 
     @staticmethod
     def lookup_clock_hz(device_name: str) -> Optional[float]:

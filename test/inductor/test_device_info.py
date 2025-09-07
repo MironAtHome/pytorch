@@ -207,7 +207,6 @@ class TestDeviceInfo(TestCase):
 
             expected_calls = [
                 call("amdsmi"),
-                call("rocm_smi"),
             ]
             mock_import.assert_has_calls(expected_calls, any_order=False)
 
@@ -545,40 +544,6 @@ class TestDeviceInfo(TestCase):
         except Exception as e:
             self.fail(f"pynvml integration failed: {e}")
 
-    @unittest.skipIf(
-        False, "pynvml and amdsmi are not available in CI, run these tests locally"
-    )
-    @unittest.skipIf(
-        not torch.version.hip, "only amd"
-    )
-    def test_rocm_smi_integration(self):
-        """Test direct rocm_smi library integration."""
-        try:
-            import rocm_smi
-
-            # Test basic ROCm SMI initialization
-            rocm_smi.rsmi_init()
-
-            # Test system clock frequency retrieval
-            sys_clock_mhz = rocm_smi.rsmi_dev_gpu_clk_freq_get(
-                0, rocm_smi.RSMI_CLK_TYPE_SYS
-            )
-            self.assertIsInstance(sys_clock_mhz, int)
-            self.assertGreater(sys_clock_mhz, 0)
-
-            # Test memory clock frequency retrieval
-            mem_clock_mhz = rocm_smi.rsmi_dev_gpu_clk_freq_get(
-                0, rocm_smi.RSMI_CLK_TYPE_MEM
-            )
-            self.assertIsInstance(mem_clock_mhz, int)
-            self.assertGreater(mem_clock_mhz, 0)
-
-            rocm_smi.rsmi_shut_down()
-
-        except ImportError:
-            self.fail("rocm_smi library not available - install ROCm SMI")
-        except Exception as e:
-            self.fail(f"rocm_smi integration failed: {e}")
 
     @unittest.skipIf(
         False, "pynvml and amdsmi are not available in CI, run these tests locally"
@@ -647,25 +612,7 @@ class TestDeviceInfo(TestCase):
     )
     def test_amd_smi_error_handling(self):
         """Test AMD SMI error handling for invalid operations."""
-        # Try rocm_smi first
-        try:
-            import rocm_smi
-
-            rocm_smi.rsmi_init()
-
-            # Test invalid device index - should raise exception or return error
-            try:
-                rocm_smi.rsmi_dev_gpu_clk_freq_get(999, rocm_smi.RSMI_CLK_TYPE_SYS)
-            except Exception:
-                pass  # Expected for invalid device
-
-            rocm_smi.rsmi_shut_down()
-            return
-
-        except ImportError:
-            pass
-
-        # Try amdsmi if rocm_smi not available
+        # Try amdsmi only
         try:
             import amdsmi
 
@@ -678,7 +625,7 @@ class TestDeviceInfo(TestCase):
             amdsmi.amdsmi_shut_down()
 
         except ImportError:
-            self.skipTest("Neither rocm_smi nor amdsmi libraries available")
+            self.skipTest("amdsmi library not available")
 
     @unittest.skipIf(
         False, "pynvml and amdsmi are not available in CI, run these tests locally"
@@ -688,18 +635,6 @@ class TestDeviceInfo(TestCase):
     )
     def test_library_versions_and_constants_amd(self):
         """Test that expected constants and versions are available."""
-        # Test rocm_smi constants
-        import rocm_smi
-
-        # Check that required constants exist
-        self.assertTrue(hasattr(rocm_smi, "RSMI_CLK_TYPE_SYS"))
-        self.assertTrue(hasattr(rocm_smi, "RSMI_CLK_TYPE_MEM"))
-
-        # Check that required functions exist
-        self.assertTrue(hasattr(rocm_smi, "rsmi_init"))
-        self.assertTrue(hasattr(rocm_smi, "rsmi_dev_gpu_clk_freq_get"))
-        self.assertTrue(hasattr(rocm_smi, "rsmi_shut_down"))
-
         import amdsmi
 
         # Check that required functions exist
